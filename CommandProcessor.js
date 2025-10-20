@@ -1,23 +1,128 @@
 export default class CommandProcessor {
     eventEmitter;
     requestThrottler;
-    static pokeResponses = ["Ow!", "Cut it out!", "Stop it!", "Ouch!", "That hurts!"];
+    dbManager;
+    macroExpander;
+    static adminRole = 1;
+    static authorRole = 2;
+    static hardcodedCommands = {
+        addcommand: (self, params, roles) => {
+            if (params == null || params.length < 2 || 
+                (roles.indexOf(CommandProcessor.adminRole) === -1 && roles.indexOf(CommandProcessor.authorRole) === -1))
+                return;
+            const database = new self.dbManager.sqlite.Database(self.dbManager.dbPath, (err) => {
+                if (err) {
+                    console.error(err.message); 
+                }
+            });
+            
+            let commandId = 0;
+            let responseId = 0;
+            let responseText = params.splice(1).join(" ");
+            self.dbManager.asyncGet(database, 
+                "INSERT INTO Command (Text) VALUES (?) RETURNING ROWID;", [params[0]])
+            .then((row) => {
+                if (row) {
+                    commandId = row.CommandId;
+                    console.log(`Inserted command with ID: ${row.CommandId}`);
+                }
 
-    constructor(eventEmitter_, requestThrottler_) {
+                return self.dbManager.asyncGet(database,
+                "INSERT INTO Response (CommandId, Text) VALUES (?, ?) RETURNING ROWID;", [commandId, responseText]);
+            }, (err) => { console.log(err); })
+            .then((row) => {
+                if (row)
+                    console.log(`Inserted response with ID: ${row.ResponseId}`); 
+                database.close();
+            }, (err) => { console.log(err); });
+        }, 
+        removecommand: (self, params, roles) => {
+            if (params == null || params.length < 1 || roles.indexOf(CommandProcessor.adminRole) === -1)
+                return;
+            const database = new self.dbManager.sqlite.Database(self.dbManager.dbPath, (err) => {
+                if (err) {
+                    console.error(err.message);
+                }
+            });
+
+            let commandId = 0;
+            self.dbManager.asyncGet(database,
+                "SELECT c.CommandId FROM Command c JOIN Response r ON r.CommandId = c.CommandId WHERE c.Text = ?;",
+                [params[0]])
+            .then((row) => {
+                if (row)
+                    commandId = row.CommandId;
+                return self.dbManager.asyncRun(database,
+                "DELETE FROM Response WHERE CommandId = ?;",
+                [commandId]);
+            })
+            .then(() => {
+                return self.dbManager.asyncRun(database,
+                "DELETE FROM Command WHERE CommandId = ?;",
+                [commandId]);
+            })
+            .then(() => {
+                console.log(`CommandId: ${commandId} deleted`);
+                database.close();
+            });
+        }
+    };
+
+    constructor(eventEmitter_, requestThrottler_, dbManager_, macroExpander_) {
         this.eventEmitter = eventEmitter_;
         this.requestThrottler = requestThrottler_;
+        this.dbManager = dbManager_;
+        this.macroExpander = macroExpander_;
     }
 
     onReceiveChatMessage(self, e) {
         if (self.requestThrottler.isOnCooldown() || !e.message.text.startsWith("!"))
             return;
-        const messageText = e.message.text.toLowerCase();
-        const command = e.message.text.substring(1).split(" ")[0];
-        if (command === "poke" || command === "stab" || command === "bash" || command === "slash") {
-            self.eventEmitter.emit("chatMessageSend", CommandProcessor.pokeResponses[Math.floor(Math.random() * CommandProcessor.pokeResponses.length)]);
+        const messageText = e.message.text;
+        const messageParts = messageText.substring(1).split(" ");
+        const command = messageParts[0].toLowerCase();
+        const params = messageParts.splice(1);
+        const database = new self.dbManager.sqlite.Database(self.dbManager.dbPath, (err) => {
+            if (err) {
+                console.error(err);
+            }
+        });
+
+        if (CommandProcessor.hardcodedCommands.hasOwnProperty(command)) {
+            self.dbManager.asyncAll(database,
+            `SELECT brt.RoleTypeId 
+             FROM BotUser bu
+             JOIN BotRole br ON br.UserId = bu.UserId
+             JOIN BotRoleType brt ON brt.RoleTypeId = br.RoleTypeId
+             WHERE bu.ChatUserId = ?;
+            `, [e.chatter_user_id])
+            .then((rows) => {
+                database.close();
+                if (!rows)
+                    return;
+                const roles = [];
+                for (let i = 0; i < rows.length; i++)
+                    roles[i] = rows[i].RoleTypeId;
+                CommandProcessor.hardcodedCommands[command](self, params, roles); 
+            });
+
+            return;
         }
 
-        self.requestThrottler.update();
+        self.dbManager.asyncAll(database,
+        `SELECT r.Text 
+         FROM Command c
+         JOIN Response r ON r.CommandId = c.CommandId
+         WHERE c.Text = ?`, [command])
+         .then((rows) => {
+            if (rows && rows.length > 0) {
+                const messageText = self.macroExpander.expand(e, rows[Math.floor(Math.random() * rows.length)].Text);
+                self.eventEmitter.emit("chatMessageSend", messageText);
+                self.requestThrottler.update();
+            }
+
+            database.close();
+        }); 
     }
 }
 

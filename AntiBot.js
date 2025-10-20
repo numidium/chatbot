@@ -14,7 +14,7 @@ export default class AntiBot {
 
     onReceiveChatMessage(self, e) {
         const botThreshold = 3;
-        const messageText = e.message.text.trim().toLowerCase();
+        const messageText = e.message.text.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
         let botScore = 0;
         if (messageText.includes("cheap"))
             botScore++;
@@ -25,10 +25,10 @@ export default class AntiBot {
         if (messageText.includes("boo"))
             botScore++;
         if (botScore >= botThreshold) {
-            self.eventEmitter.emit("chatMessageDelete", data.payload.event);
+            self.eventEmitter.emit("chatMessageDelete", e);
             if (self.requestThrottler.isOnCooldown())
                 return;
-            self.eventEmitter.emit("chatMessageSend", self.deleteMessages[Math.floor(Math.random() * self.deleteMessages.length)]);
+            self.eventEmitter.emit("chatMessageSend", AntiBot.deleteMessages[Math.floor(Math.random() * AntiBot.deleteMessages.length)]);
             self.requestThrottler.update();
             return;
         }

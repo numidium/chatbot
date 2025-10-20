@@ -3,8 +3,17 @@ import WebSocket from 'ws';
 import { EventEmitter } from 'node:events';
 import RequestThrottler from './RequestThrottler.js';
 import AntiBot from './AntiBot.js';
+import DatabaseManager from './DatabaseManager.js';
 import CommandProcessor from './CommandProcessor.js';
+import Moderation from './Moderation.js';
+import MacroExpander from './MacroExpander.js';
+import https from 'https';
+import fs from 'fs';
+import sqlite3 from 'sqlite3';
 
+const privateKey = fs.readFileSync("../raspberrypi-key.pem", "utf-8");
+const certificate = fs.readFileSync("../raspberrypi.pem", "utf-8");
+const httpsOptions = { key: privateKey, cert: certificate };
 const app = express();
 const HOST_NAME = "localhost";
 const PORT = 3001;
@@ -18,14 +27,14 @@ app.get("/", async (req, res) => {
     res.sendStatus(200);
 });
 
-app.listen(PORT, () => {
+https.createServer(httpsOptions, app).listen(PORT, () => {
     console.log(`Chat bot server listening on port ${PORT}`);
 });
 
 const BOT_USER_ID = "1366238110";
 const CLIENT_ID = "DUMMY_CLIENT_ID";
 const CLIENT_SECRET = "DUMMY_CLIENT_SECRET";
-const BROADCASTER_USER_ID = "66293282"; // This is the User ID of the channel that the bot will join and listen to chat messages of
+const BROADCASTER_USER_ID = "66293282";
 const EVENTSUB_WEBSOCKET_URL = "wss://eventsub.wss.twitch.tv/ws";
 const REQUEST_INTERVAL = 3000;
 const eventTypes = {
@@ -37,21 +46,24 @@ const eventTypes = {
 
 const eventEmitter = new EventEmitter();
 const requestThrottler = new RequestThrottler(REQUEST_INTERVAL);
-const commandProcessor = new CommandProcessor(eventEmitter, requestThrottler);
+const dbManager = new DatabaseManager(sqlite3, "./db/chatbot.db");
+const macroExpander = new MacroExpander(dbManager);
+const commandProcessor = new CommandProcessor(eventEmitter, requestThrottler, dbManager, macroExpander);
 const antiBot = new AntiBot(eventEmitter, requestThrottler);
-const moderation = new Moderation(eventEmitter);
+const moderation = new Moderation(eventEmitter, BOT_USER_ID);
 
 let accessToken;
 let refreshToken;
 let websocketSessionID;
+let wsClient;
 
 async function botStart() {
     await getToken();
-    const websocketClient = startWebSocketClient();
+    wsClient = startWebSocketClient(EVENTSUB_WEBSOCKET_URL);
 }
 
 async function getToken() {
-    const response = await fetch(`https://id.twitch.tv/oauth2/token?client_id=${CLIENT_ID}&client_secret=${CLIENT_SECRET}&code=${authCode}&grant_type=authorization_code&redirect_uri=http://${HOST_NAME}:${PORT}/`, { method: "POST" });
+    const response = await fetch(`https://id.twitch.tv/oauth2/token?client_id=${CLIENT_ID}&client_secret=${CLIENT_SECRET}&code=${authCode}&grant_type=authorization_code&redirect_uri=https://${HOST_NAME}:${PORT}/`, { method: "POST" });
     if (response.status != 200) {
         let data = await response.json();
         console.error("Invalid authorization code: " + response.status);
@@ -81,14 +93,22 @@ async function refreshCurrentToken() {
     }
 }
 
-function startWebSocketClient() {
-    let websocketClient = new WebSocket(EVENTSUB_WEBSOCKET_URL);
+function startWebSocketClient(url) {
+    let websocketClient = new WebSocket(url);
     websocketClient.on("error", console.error);
     websocketClient.on("open", () => {
-        console.log("WebSocket connection opened to " + EVENTSUB_WEBSOCKET_URL);
+        console.log("WebSocket connection opened to " + url);
     });
 
     websocketClient.on("message", (data) => {
+        handleWebSocketMessage(JSON.parse(data.toString()));
+    });
+
+    websocketClient.on("reconnect", (data) => {
+        handleWebSocketMessage(JSON.parse(data.toString()));
+    });
+
+    websocketClient.on("close", (data) => {
         handleWebSocketMessage(JSON.parse(data.toString()));
     });
 
@@ -96,10 +116,15 @@ function startWebSocketClient() {
 }
 
 function handleWebSocketMessage(data) {
+    if (data.metadata == null) {
+        console.log(data);
+        return;
+    }
+
     switch (data.metadata.message_type) {
         case "session_welcome": // First message you get from the WebSocket server when connecting
             websocketSessionID = data.payload.session.id; // Register the Session ID it gives us
-            console.log(`Session ID: ${websocketSessionID}`);
+            console.log(`Session welcome received. ID: ${websocketSessionID}`);
             registerEventSubListeners();
             break;
         case "notification":
@@ -110,6 +135,17 @@ function handleWebSocketMessage(data) {
                 default:
                     break;
             }
+
+            break;
+        case "session_reconnect":
+            console.log(`Receieved session reconnect at ${data.metadata.message_timestamp}`);
+            websocketSessionID = data.payload.session.id;
+            refreshCurrentToken().then();
+            wsClient = startWebSocketClient(data.payload.session.reconnect_url);
+            break;
+        case "close":
+            console.log(`Socket closed. Code: ${data.code}, reason ${data.reason}`);
+            break;
         default:
             break;
     }
@@ -119,7 +155,7 @@ async function registerEventSubListeners() {
     let response = await fetch("https://api.twitch.tv/helix/eventsub/subscriptions", {
         method: "POST",
         headers: {
-            "Authorization": "Bearer " + accessToken,
+            "Authorization": "Bearer " + encodeURIComponent(accessToken),
             "Client-Id": CLIENT_ID,
             "Content-Type": "application/json"
         },
@@ -152,7 +188,7 @@ async function onSendChatMessage(chatMessage) {
     const response = await fetch("https://api.twitch.tv/helix/chat/messages", {
         method: "POST",
         headers: {
-            "Authorization": "Bearer " + accessToken,
+            "Authorization": "Bearer " + encodeURIComponent(accessToken),
             "Client-Id": CLIENT_ID,
             "Content-Type": "application/json"
         },
@@ -167,7 +203,7 @@ async function onSendChatMessage(chatMessage) {
         const data = await response.json();
         console.error("Failed to send chat message.");
         console.error(data);
-        if (response.status === 401)
+        if (response.status >= 400)
             await refreshCurrentToken();
     }
     else {
@@ -179,7 +215,7 @@ async function onDeleteChatMessage(e) {
     const response = await fetch("https://api.twitch.tv/helix/moderation/chat", {
         method: "DELETE",
         headers: {
-            "Authorization": "Bearer " + accessToken,
+            "Authorization": "Bearer " + encodeURIComponent(accessToken),
             "Client-Id": CLIENT_ID,
             "Content-Type": "application/json"
         },
@@ -206,7 +242,7 @@ async function onTimeoutUser(userId, duration) {
     const response = await fetch(`https://api.twitch.tv/helix/moderation/bans?broadcaster_id=${BROADCASTER_USER_ID}&moderator_id=${BOT_USER_ID}`, {
         method: "POST",
         headers: {
-            "Authorization": "Bearer " + accessToken,
+            "Authorization": "Bearer " + encodeURIComponent(accessToken),
             "Client-Id": CLIENT_ID,
             "Content-Type": "application/json"
         },
@@ -220,12 +256,13 @@ async function onTimeoutUser(userId, duration) {
 
     if (response.status >= 400) {
         const data = await response.json();
-        console.error(`Failed to timeout user: ${data.user_id}`);
+        console.error(`Failed to timeout user: ${userId}`);
+        console.error(data);
         if (response.status === 401)
             await refreshCurrentToken();
     }
     else {
-        console.log(`Timed out user: ${data.user_id}`);
+        console.log(`Timed out user: ${userId}`);
     }
 }
 
@@ -234,5 +271,5 @@ eventEmitter.on(eventTypes.receivedChatMessage, (e) => { antiBot.onReceiveChatMe
 eventEmitter.on(eventTypes.receivedChatMessage, (e) => { moderation.onReceiveChatMessage(moderation, e); });
 eventEmitter.on(eventTypes.chatMessageSend, onSendChatMessage);
 eventEmitter.on(eventTypes.chatMessageDelete, onDeleteChatMessage);
-EventEmitter.on(eventTypes.userTimeout, onTimeoutUser);
+eventEmitter.on(eventTypes.userTimeout, onTimeoutUser);
 
