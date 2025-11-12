@@ -7,9 +7,16 @@ import DatabaseManager from './DatabaseManager.js';
 import CommandProcessor from './CommandProcessor.js';
 import Moderation from './Moderation.js';
 import MacroExpander from './MacroExpander.js';
+import Logger from './Logger.js';
 import https from 'https';
 import fs from 'fs';
 import sqlite3 from 'sqlite3';
+import process from 'node:process';
+
+process.on("uncaughtException", (err, origin) => {
+    Logger.error(`Uncaught Exception: ${err}\nOrigin: ${origin}`);
+    process.exit(1);
+});
 
 const privateKey = fs.readFileSync("../raspberrypi-key.pem", "utf-8");
 const certificate = fs.readFileSync("../raspberrypi.pem", "utf-8");
@@ -20,15 +27,15 @@ const PORT = 3001;
 let authCode = "";
 
 app.get("/", async (req, res) => {
-    console.log(req.query);
-    console.log(`Auth Code: ${req.query.code}`);
+    Logger.log(req.query);
+    Logger.log(`Auth Code: ${req.query.code}`);
     authCode = req.query.code;
     await botStart();
     res.sendStatus(200);
 });
 
 https.createServer(httpsOptions, app).listen(PORT, () => {
-    console.log(`Chat bot server listening on port ${PORT}`);
+    Logger.log(`Chat bot server listening on port ${PORT}`);
 });
 
 const BOT_USER_ID = "1366238110";
@@ -41,7 +48,8 @@ const eventTypes = {
     receivedChatMessage: "channel.chat.message",
     chatMessageSend: "chatMessageSend",
     chatMessageDelete: "chatMessageDelete",
-    userTimeout: "userTimeout"
+    userTimeout: "userTimeout",
+    spamTermAdd: "spamTermAdd"
 };
 
 const eventEmitter = new EventEmitter();
@@ -49,7 +57,7 @@ const requestThrottler = new RequestThrottler(REQUEST_INTERVAL);
 const dbManager = new DatabaseManager(sqlite3, "./db/chatbot.db");
 const macroExpander = new MacroExpander(dbManager);
 const commandProcessor = new CommandProcessor(eventEmitter, requestThrottler, dbManager, macroExpander);
-const antiBot = new AntiBot(eventEmitter, requestThrottler);
+const antiBot = new AntiBot(eventEmitter, requestThrottler, dbManager);
 const moderation = new Moderation(eventEmitter, BOT_USER_ID);
 
 let accessToken;
@@ -66,15 +74,15 @@ async function getToken() {
     const response = await fetch(`https://id.twitch.tv/oauth2/token?client_id=${CLIENT_ID}&client_secret=${CLIENT_SECRET}&code=${authCode}&grant_type=authorization_code&redirect_uri=https://${HOST_NAME}:${PORT}/`, { method: "POST" });
     if (response.status != 200) {
         let data = await response.json();
-        console.error("Invalid authorization code: " + response.status);
-        console.error(data);
+        Logger.error("Invalid authorization code: " + response.status);
+        Logger.error(data);
         process.exit(1);
     }
     else {
         const responseJson = await response.json();
         accessToken = responseJson.access_token;
         refreshToken = responseJson.refresh_token;
-        console.log(`Retrieved token. Access: ${accessToken} Refresh: ${refreshToken}`);
+        Logger.log(`Retrieved token. Access: ${accessToken} Refresh: ${refreshToken}`);
     }
 }
 
@@ -82,22 +90,29 @@ async function refreshCurrentToken() {
     const response = await fetch(`https://id.twitch.tv/oauth2/token?client_id=${CLIENT_ID}&client_secret=${CLIENT_SECRET}&grant_type=refresh_token&refresh_token=${refreshToken}`, { method: "POST" });
     if (response.status >= 400) {
         let data = await response.json();
-        console.error(`Could not refresh token: ${response.status} ${data.message}`);
+        Logger.error(`Could not refresh token: ${response.status} ${data.message}`);
         process.exit(1);
     }
     else {
         const responseJson = await response.json();
         accessToken = responseJson.access_token;
         refreshToken = responseJson.refresh_token;
-        console.log("Token refresh successful.");
+        Logger.log("Token refresh successful.");
     }
 }
 
 function startWebSocketClient(url) {
     let websocketClient = new WebSocket(url);
-    websocketClient.on("error", console.error);
+    websocketClient.on("error", (e) => {
+        Logger.error(e);
+    });
+
     websocketClient.on("open", () => {
-        console.log("WebSocket connection opened to " + url);
+        Logger.log("WebSocket connection opened to " + url);
+    });
+
+    websocketClient.on("ping", (data) => {
+        websocketClient.pong();
     });
 
     websocketClient.on("message", (data) => {
@@ -117,14 +132,14 @@ function startWebSocketClient(url) {
 
 function handleWebSocketMessage(data) {
     if (data.metadata == null) {
-        console.log(data);
+        Logger.error(data);
         return;
     }
 
     switch (data.metadata.message_type) {
         case "session_welcome": // First message you get from the WebSocket server when connecting
             websocketSessionID = data.payload.session.id; // Register the Session ID it gives us
-            console.log(`Session welcome received. ID: ${websocketSessionID}`);
+            Logger.log(`Session welcome received. ID: ${websocketSessionID}`);
             registerEventSubListeners();
             break;
         case "notification":
@@ -138,13 +153,15 @@ function handleWebSocketMessage(data) {
 
             break;
         case "session_reconnect":
-            console.log(`Receieved session reconnect at ${data.metadata.message_timestamp}`);
+            Logger.log(`Receieved session reconnect at ${data.metadata.message_timestamp}`);
             websocketSessionID = data.payload.session.id;
-            refreshCurrentToken().then();
-            wsClient = startWebSocketClient(data.payload.session.reconnect_url);
+            refreshCurrentToken().then(() => {
+                wsClient = startWebSocketClient(data.payload.session.reconnect_url);
+            });
+
             break;
         case "close":
-            console.log(`Socket closed. Code: ${data.code}, reason ${data.reason}`);
+            Logger.log(`Socket closed. Code: ${data.code}, reason ${data.reason}`);
             break;
         default:
             break;
@@ -175,12 +192,12 @@ async function registerEventSubListeners() {
 
     if (response.status >= 400) {
         let data = await response.json();
-        console.error(`Failed to subscribe to ${eventTypes.receivedChatMessage}. API call returned status code ${response.status}`);
-        console.error(data);
+        Logger.error(`Failed to subscribe to ${eventTypes.receivedChatMessage}. API call returned status code ${response.status}`);
+        Logger.error(data);
         process.exit(1);
     } else {
         const data = await response.json();
-        console.log(`Subscribed to ${eventTypes.receivedChatMessage} [${data.data[0].id}]`);
+        Logger.log(`Subscribed to ${eventTypes.receivedChatMessage} [${data.data[0].id}]`);
     }
 }
 
@@ -201,13 +218,13 @@ async function onSendChatMessage(chatMessage) {
 
     if (response.status != 200) {
         const data = await response.json();
-        console.error("Failed to send chat message.");
-        console.error(data);
+        Logger.error("Failed to send chat message.");
+        Logger.error(data);
         if (response.status >= 400)
             await refreshCurrentToken();
     }
     else {
-        console.log("Sent chat message: " + chatMessage);
+        Logger.log("Chat: " + chatMessage);
     }
 }
 
@@ -228,13 +245,13 @@ async function onDeleteChatMessage(e) {
 
     if (response.status >= 400) {
         const data = await response.json();
-        console.error(`Failed to delete chat message: ${e.message_id}`);
-        console.error(data);
+        Logger.error(`Failed to delete chat message: ${e.message_id}`);
+        Logger.error(data);
         if (response.status === 401)
             await refreshCurrentToken();
     }
     else {
-        console.log(`Deleted chat message: ${e.message_id}`);
+        Logger.log(`Deleted chat message: ${e.message_id}`);
     }
 }
 
@@ -256,18 +273,19 @@ async function onTimeoutUser(userId, duration) {
 
     if (response.status >= 400) {
         const data = await response.json();
-        console.error(`Failed to timeout user: ${userId}`);
-        console.error(data);
+        Logger.error(`Failed to timeout user: ${userId}`);
+        Logger.error(data);
         if (response.status === 401)
             await refreshCurrentToken();
     }
     else {
-        console.log(`Timed out user: ${userId}`);
+        Logger.log(`Timed out user: ${userId}`);
     }
 }
 
 eventEmitter.on(eventTypes.receivedChatMessage, (e) => { commandProcessor.onReceiveChatMessage(commandProcessor, e); });
 eventEmitter.on(eventTypes.receivedChatMessage, (e) => { antiBot.onReceiveChatMessage(antiBot, e); });
+eventEmitter.on(eventTypes.spamTermAdd, (e) => { antiBot.onSpamTermAdd(antiBot, e); });
 eventEmitter.on(eventTypes.receivedChatMessage, (e) => { moderation.onReceiveChatMessage(moderation, e); });
 eventEmitter.on(eventTypes.chatMessageSend, onSendChatMessage);
 eventEmitter.on(eventTypes.chatMessageDelete, onDeleteChatMessage);

@@ -1,3 +1,5 @@
+import Logger from './Logger.js';
+
 export default class CommandProcessor {
     eventEmitter;
     requestThrottler;
@@ -11,9 +13,7 @@ export default class CommandProcessor {
                 (roles.indexOf(CommandProcessor.adminRole) === -1 && roles.indexOf(CommandProcessor.authorRole) === -1))
                 return;
             const database = new self.dbManager.sqlite.Database(self.dbManager.dbPath, (err) => {
-                if (err) {
-                    console.error(err.message); 
-                }
+                if (err) Logger.error(err.message); 
             });
             
             let commandId = 0;
@@ -24,25 +24,23 @@ export default class CommandProcessor {
             .then((row) => {
                 if (row) {
                     commandId = row.CommandId;
-                    console.log(`Inserted command with ID: ${row.CommandId}`);
+                    Logger.log(`INSERT: Command ${row.CommandId}`);
                 }
 
                 return self.dbManager.asyncGet(database,
                 "INSERT INTO Response (CommandId, Text) VALUES (?, ?) RETURNING ROWID;", [commandId, responseText]);
-            }, (err) => { console.log(err); })
+            }, (err) => { Logger.error(err); })
             .then((row) => {
                 if (row)
-                    console.log(`Inserted response with ID: ${row.ResponseId}`); 
+                    Logger.log(`INSERT: Response ${row.ResponseId}`); 
                 database.close();
-            }, (err) => { console.log(err); });
+            }, (err) => { Logger.error(err); });
         }, 
         removecommand: (self, params, roles) => {
             if (params == null || params.length < 1 || roles.indexOf(CommandProcessor.adminRole) === -1)
                 return;
             const database = new self.dbManager.sqlite.Database(self.dbManager.dbPath, (err) => {
-                if (err) {
-                    console.error(err.message);
-                }
+                if (err) Logger.error(err.message);
             });
 
             let commandId = 0;
@@ -62,9 +60,17 @@ export default class CommandProcessor {
                 [commandId]);
             })
             .then(() => {
-                console.log(`CommandId: ${commandId} deleted`);
+                if (commandId > 0)
+                    Logger.log(`DELETE: Command ${commandId}`);
+                else
+                    Logger.log(`DELETE: No Command with key "${params[0]}"`);
                 database.close();
             });
+        },
+        addSpamTerm: (self, params, roles) => {
+            if (params == null || params.length < 1 || roles.indexOf(CommandProcessor.adminRole) === -1)
+                return;
+            self.eventEmitter("spamTermAdd", params[0]);
         }
     };
 
@@ -83,9 +89,7 @@ export default class CommandProcessor {
         const command = messageParts[0].toLowerCase();
         const params = messageParts.splice(1);
         const database = new self.dbManager.sqlite.Database(self.dbManager.dbPath, (err) => {
-            if (err) {
-                console.error(err);
-            }
+            if (err) Logger.error(err);
         });
 
         if (CommandProcessor.hardcodedCommands.hasOwnProperty(command)) {
