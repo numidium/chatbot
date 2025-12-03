@@ -22,7 +22,7 @@ export default class AntiBot {
             self.eventEmitter.emit("chatMessageDelete", e);
             if (self.requestThrottler.isOnCooldown())
                 return;
-            self.eventEmitter.emit("chatMessageSend", AntiBot.deleteMessages[Math.floor(Math.random() * AntiBot.deleteMessages.length)]);
+            self.eventEmitter.emit("chatMessageSend", { chatMessage: AntiBot.deleteMessages[Math.floor(Math.random() * AntiBot.deleteMessages.length)] });
             self.requestThrottler.update();
             return;
         }   

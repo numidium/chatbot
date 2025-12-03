@@ -121,7 +121,7 @@ export default class CommandProcessor {
          .then((rows) => {
             if (rows && rows.length > 0) {
                 const messageText = self.macroExpander.expand(e, rows[Math.floor(Math.random() * rows.length)].Text);
-                self.eventEmitter.emit("chatMessageSend", messageText);
+                self.eventEmitter.emit("chatMessageSend", { chatMessage: messageText });
                 self.requestThrottler.update();
             }
 

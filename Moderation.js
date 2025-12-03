@@ -26,8 +26,8 @@ export default class Moderation {
         else {
             const userSpamCount = ++self.userHeatValues[userId].spamCount;
             if (userSpamCount > Moderation.MAX_SPAM_COUNT) {
-                self.eventEmitter.emit("userTimeout", userId, Moderation.SPAM_TIMEOUT);
-                self.eventEmitter.emit("chatMessageSend", `No spamming, please! @${e.chatter_user_name}`);
+                self.eventEmitter.emit("userTimeout", { userId: userId, duration: Moderation.SPAM_TIMEOUT });
+                self.eventEmitter.emit("chatMessageSend", { chatMessage: `No spamming, please! @${e.chatter_user_name}` });
             }
         }
 
