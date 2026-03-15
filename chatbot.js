@@ -7,6 +7,7 @@ import DatabaseManager from './DatabaseManager.js';
 import CommandProcessor from './CommandProcessor.js';
 import Moderation from './Moderation.js';
 import MacroExpander from './MacroExpander.js';
+import Chatter from './Chatter.js';
 import Logger from './Logger.js';
 import https from 'https';
 import fs from 'fs';
@@ -47,6 +48,7 @@ const EVENTSUB_WEBSOCKET_URL = "wss://eventsub.wss.twitch.tv/ws";
 const REQUEST_INTERVAL = 3000;
 const eventTypes = {
     receivedChatMessage: "channel.chat.message",
+    streamStarted: "stream.online",
     chatMessageSend: "chatMessageSend",
     chatMessageDelete: "chatMessageDelete",
     userTimeout: "userTimeout",
@@ -60,6 +62,7 @@ const macroExpander = new MacroExpander(dbManager);
 const commandProcessor = new CommandProcessor(eventEmitter, requestThrottler, dbManager, macroExpander);
 const antiBot = new AntiBot(eventEmitter, requestThrottler, dbManager);
 const moderation = new Moderation(eventEmitter, BOT_USER_ID);
+const chatter = new Chatter(eventEmitter, dbManager, macroExpander, 1000 * 60 * 60);
 
 let accessToken;
 let refreshToken;
@@ -134,6 +137,10 @@ function startWebSocketClient(url) {
 function handleWebSocketMessage(data) {
     if (data.metadata == null) {
         Logger.error(data);
+        if (data == 1006) {
+            wsClient = startWebSocketClient(EVENTSUB_WEBSOCKET_URL);
+        }
+
         return;
     }
 
@@ -143,11 +150,15 @@ function handleWebSocketMessage(data) {
             Logger.log(`Session welcome received. ID: ${websocketSessionID}`);
             if (!firstRegister) {
                 firstRegister = true;
-                registerEventSubListeners();
+                subscribeToStreamStartEvent();
+                subscribeToChatEvent();
             }
             break;
         case "notification":
             switch (data.metadata.subscription_type) {
+                case eventTypes.streamStarted:
+                    eventEmitter.emit(eventTypes.streamStarted, data.payload.event);
+                    break;
                 case eventTypes.receivedChatMessage:
                     eventEmitter.emit(eventTypes.receivedChatMessage, data.payload.event);
                     break;
@@ -173,7 +184,7 @@ function handleWebSocketMessage(data) {
     }
 }
 
-async function registerEventSubListeners() {
+async function subscribeToChatEvent() {
     let response = await fetch("https://api.twitch.tv/helix/eventsub/subscriptions", {
         method: "POST",
         headers: {
@@ -203,6 +214,38 @@ async function registerEventSubListeners() {
     } else {
         const data = await response.json();
         Logger.log(`Subscribed to ${eventTypes.receivedChatMessage} [${data.data[0].id}]`);
+    }
+}
+
+async function subscribeToStreamStartEvent() {
+    let response = await fetch("https://api.twitch.tv/helix/eventsub/subscriptions", {
+        method: "POST",
+        headers: {
+            "Authorization": "Bearer " + encodeURIComponent(accessToken),
+            "Client-Id": CLIENT_ID,
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            type: eventTypes.streamStarted,
+            version: "1",
+            condition: {
+                broadcaster_user_id: BROADCASTER_USER_ID
+            },
+            transport: {
+                method: "websocket",
+                session_id: websocketSessionID
+            }
+        })
+    });
+
+    if (response.status >= 400) {
+        let data = await response.json();
+        Logger.error(`Failed to subscribe to ${eventTypes.streamStarted}. API call returned status code ${response.status}`);
+        Logger.error(data);
+        process.exit(1);
+    } else {
+        const data = await response.json();
+        Logger.log(`Subscribed to ${eventTypes.streamStarted} [${data.data[0].id}]`);
     }
 }
 
@@ -260,6 +303,8 @@ async function timeoutUser(e) {
             }
         })
     });
+
+    return response;
 }
 
 async function onSendChatMessage(e) {
@@ -293,6 +338,7 @@ async function tryChatAction(e, action, actionText, successText) {
     }
 }
 
+eventEmitter.on(eventTypes.streamStarted, (e) => { chatter.onReceiveStreamStartMessage(chatter, e); });
 eventEmitter.on(eventTypes.receivedChatMessage, (e) => { commandProcessor.onReceiveChatMessage(commandProcessor, e); });
 eventEmitter.on(eventTypes.receivedChatMessage, (e) => { antiBot.onReceiveChatMessage(antiBot, e); });
 eventEmitter.on(eventTypes.spamTermAdd, (e) => { antiBot.onSpamTermAdd(antiBot, e); });

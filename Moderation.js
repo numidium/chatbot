@@ -13,7 +13,7 @@ export default class Moderation {
 
     onReceiveChatMessage(self, e) {
         const userId = e.chatter_user_id;
-        if (userId === self.moderatorId)
+        if (userId === self.moderatorId || userId === e.broadcaster_user_id)
             return;
         if (self.userHeatValues[userId] == null) {
             self.userHeatValues[userId] = { spamCount: 1, lastTime: Date.now() };
