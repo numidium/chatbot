@@ -3,8 +3,8 @@ import Logger from './Logger.js';
 export default class CommandProcessor {
     eventEmitter;
     requestThrottler;
-    dbManager;
     macroExpander;
+    dbManager;
     static adminRole = 1;
     static authorRole = 2;
     static hardcodedCommands = {
@@ -12,60 +12,29 @@ export default class CommandProcessor {
             if (params == null || params.length < 2 || 
                 (roles.indexOf(CommandProcessor.adminRole) === -1 && roles.indexOf(CommandProcessor.authorRole) === -1))
                 return;
-            const database = new self.dbManager.sqlite.Database(self.dbManager.dbPath, (err) => {
-                if (err) Logger.error(err.message); 
-            });
-            
-            let commandId = 0;
-            let responseId = 0;
-            let responseText = params.splice(1).join(" ");
-            self.dbManager.asyncGet(database, 
-                "INSERT INTO Command (Text) VALUES (?) RETURNING ROWID;", [params[0]])
-            .then((row) => {
-                if (row) {
-                    commandId = row.CommandId;
-                    Logger.log(`INSERT: Command ${row.CommandId}`);
-                }
-
-                return self.dbManager.asyncGet(database,
-                "INSERT INTO Response (CommandId, Text) VALUES (?, ?) RETURNING ROWID;", [commandId, responseText]);
-            }, (err) => { Logger.error(err); })
-            .then((row) => {
-                if (row)
-                    Logger.log(`INSERT: Response ${row.ResponseId}`); 
-                database.close();
-            }, (err) => { Logger.error(err); });
+            const commandId = self.dbManager.runStatement("INSERT INTO Command (Text) VALUES (?);", [params[0]]).lastInsertRowid;
+            if (commandId > 0) {
+                const responseText = params.splice(1).join(" ");
+                Logger.log(`addcommand: Inserted command row ${commandId}`);
+                const responseId = self.dbManager.runStatement("INSERT INTO Response (CommandId, Text) VALUES (?, ?);", [commandId, responseText]).lastInsertRowid;
+                if (responseId > 0) Logger.log(`addcommand: inserted response row ${responseId}`); 
+            }
         }, 
         removecommand: (self, params, roles) => {
             if (params == null || params.length < 1 || roles.indexOf(CommandProcessor.adminRole) === -1)
                 return;
-            const database = new self.dbManager.sqlite.Database(self.dbManager.dbPath, (err) => {
-                if (err) Logger.error(err.message);
-            });
+            const commandResults = 
+                self.dbManager.getResultSet(
+                    "SELECT c.CommandId FROM Command c JOIN Response r ON r.CommandId = c.CommandId WHERE c.Text = ?;", [params[0]]);
+            if (commandResults.length === 0) {
+                const commandText = params[0];
+                Logger.log(`removecommand: command ${commandText} does not exist.`);
+                return;
+            }
 
-            let commandId = 0;
-            self.dbManager.asyncGet(database,
-                "SELECT c.CommandId FROM Command c JOIN Response r ON r.CommandId = c.CommandId WHERE c.Text = ?;",
-                [params[0]])
-            .then((row) => {
-                if (row)
-                    commandId = row.CommandId;
-                return self.dbManager.asyncRun(database,
-                "DELETE FROM Response WHERE CommandId = ?;",
-                [commandId]);
-            })
-            .then(() => {
-                return self.dbManager.asyncRun(database,
-                "DELETE FROM Command WHERE CommandId = ?;",
-                [commandId]);
-            })
-            .then(() => {
-                if (commandId > 0)
-                    Logger.log(`DELETE: Command ${commandId}`);
-                else
-                    Logger.log(`DELETE: No Command with key "${params[0]}"`);
-                database.close();
-            });
+            const commandId = commandResults[0].CommandId;
+            self.dbManager.runStatement(
+                "DELETE FROM Response WHERE Response.CommandId = ?;", [commandId]);
         },
         addSpamTerm: (self, params, roles) => {
             if (params == null || params.length < 1 || roles.indexOf(CommandProcessor.adminRole) === -1)
@@ -88,45 +57,35 @@ export default class CommandProcessor {
         const messageParts = messageText.substring(1).split(" ");
         const command = messageParts[0].toLowerCase();
         const params = messageParts.splice(1);
-        const database = new self.dbManager.sqlite.Database(self.dbManager.dbPath, (err) => {
-            if (err) Logger.error(err);
-        });
 
         if (CommandProcessor.hardcodedCommands.hasOwnProperty(command)) {
-            self.dbManager.asyncAll(database,
+            const rows = self.dbManager.getResultSet(
             `SELECT brt.RoleTypeId 
              FROM BotUser bu
              JOIN BotRole br ON br.UserId = bu.UserId
              JOIN BotRoleType brt ON brt.RoleTypeId = br.RoleTypeId
              WHERE bu.ChatUserId = ?;
-            `, [e.chatter_user_id])
-            .then((rows) => {
-                database.close();
-                if (!rows)
-                    return;
-                const roles = [];
-                for (let i = 0; i < rows.length; i++)
-                    roles[i] = rows[i].RoleTypeId;
-                CommandProcessor.hardcodedCommands[command](self, params, roles); 
-            });
+            `, [e.chatter_user_id]);
+            if (!rows || rows.length === 0)
+                return;
+            const roles = [];
+            for (let i = 0; i < rows.length; i++)
+                roles[i] = rows[i].RoleTypeId;
+            CommandProcessor.hardcodedCommands[command](self, params, roles); 
 
             return;
         }
 
-        self.dbManager.asyncAll(database,
+        const rows = self.dbManager.getResultSet(
         `SELECT r.Text 
          FROM Command c
          JOIN Response r ON r.CommandId = c.CommandId
-         WHERE c.Text = ?`, [command])
-         .then((rows) => {
-            if (rows && rows.length > 0) {
-                const messageText = self.macroExpander.expand(e, rows[Math.floor(Math.random() * rows.length)].Text);
-                self.eventEmitter.emit("chatMessageSend", { chatMessage: messageText });
-                self.requestThrottler.update();
-            }
-
-            database.close();
-        }); 
+         WHERE c.Text = ?`, [command]);
+        if (rows && rows.length > 0) {
+            const messageText = self.macroExpander.expand(e, rows[Math.floor(Math.random() * rows.length)].Text);
+            self.eventEmitter.emit("chatMessageSend", { chatMessage: messageText });
+            self.requestThrottler.update();
+        }
     }
 }
 

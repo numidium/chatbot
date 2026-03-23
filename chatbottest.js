@@ -3,21 +3,21 @@ import RequestThrottler from './RequestThrottler.js';
 import CommandProcessor from './commandProcessor.js';
 import DatabaseManager from './DatabaseManager.js';
 import MacroExpander from './MacroExpander.js';
-import sqlite3 from 'sqlite3';
+import Chatter from './Chatter.js';
 import AntiBot from './AntiBot.js';
 import Logger from './Logger.js';
 
 const eventEmitter = new EventEmitter();
 const requestThrottler = new RequestThrottler(3000);
 requestThrottler.lastRequestTime = 0;
-const dbManager = new DatabaseManager(sqlite3, "./db/test.db");
+const dbManager = new DatabaseManager("./db/test.db");
 const macroExpander = new MacroExpander(dbManager);
 const commandProcessor = new CommandProcessor(eventEmitter, requestThrottler, dbManager, macroExpander);
 
-eventEmitter.on("chatMessageSend", (e) => { Logger.log(e); });
-eventEmitter.on("chatMessageDelete", (e) => { Logger.log(e); });
+eventEmitter.on("chatMessageSend", (e) => { Logger.log("Sent: " + JSON.stringify(e)); });
+eventEmitter.on("chatMessageDelete", (e) => { Logger.log("Deleted: " + JSON.stringify(e)); });
 
-// Try to use a non-existant command.
+// Try to use a non-existent command.
 commandProcessor.onReceiveChatMessage(commandProcessor, {
     chatter_user_name: "admin",
     chatter_user_id: 66666666,
@@ -111,4 +111,7 @@ Logger.log("This is a test log string.");
 Logger.error("Dummy error string.");
 // Log an error object.
 Logger.error({ errorCode: 400, errorText: "Dummy error message" });
+
+const randomChatPeriod = 5000;
+const chatter = new Chatter(eventEmitter, dbManager, macroExpander, randomChatPeriod);
 

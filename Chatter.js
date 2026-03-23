@@ -9,7 +9,7 @@ export default class Chatter {
     macroExpander;
     constructor(eventEmitter_, dbManager_, macroExpander_, chatDelay_) {
         this.eventEmitter = eventEmitter_;
-        let self = this;
+        //const self = this;
         //setInterval(function () { Chatter.retrieveAndSendMessage(self, null, Chatter.messageTypes.periodic); }, chatDelay_);
         this.dbManager = dbManager_; 
         this.macroExpander = macroExpander_;
@@ -40,7 +40,8 @@ export default class Chatter {
         });
     }
 
-    digestWords(words) {
+    digestMarkov(words) {
+
     }
 
     sendChatMessage(message) {
@@ -53,8 +54,18 @@ export default class Chatter {
         });
     }
 
+    static getWords(text) {
+        return text.replace(/[^a-zA-Z0-9\s]/g, ' ').toLowerCase().split(" ").filter(Boolean);
+    }
+
     onReceiveStreamStartMessage(self, e) {
         Chatter.retrieveAndSendMessage(self, e, Chatter.messageTypes.start);
+    }
+
+    onReceiveChatMessage(self, e) {
+        const messageText = e.message.text.trim();
+        if (messageText[0] != "!")
+            self.digestMarkov(Chatter.getWords(messageText));
     }
 }
 

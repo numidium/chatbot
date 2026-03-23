@@ -18,11 +18,13 @@ export default class AntiBot {
     }
 
     deleteIfThresholdMet(self, botScore, botThreshold, e) {
-         if (botScore >= botThreshold) {
+        if (botScore >= botThreshold) {
             self.eventEmitter.emit("chatMessageDelete", e);
             if (self.requestThrottler.isOnCooldown())
                 return;
-            self.eventEmitter.emit("chatMessageSend", { chatMessage: AntiBot.deleteMessages[Math.floor(Math.random() * AntiBot.deleteMessages.length)] });
+            self.eventEmitter.emit("chatMessageSend", { 
+                chatMessage: AntiBot.deleteMessages[Math.floor(Math.random() * AntiBot.deleteMessages.length)] 
+            });
             self.requestThrottler.update();
             return;
         }   
@@ -36,33 +38,20 @@ export default class AntiBot {
         if (normalizedText.match(diacriticPattern))
             botScore++;
         const messageText = normalizedText.replace(diacriticPattern, "");
-
         if (!self.spamTermCache) {
-            const database = new this.dbManager.sqlite.Database(this.dbManager.dbPath, (err) => {
-                if (err) Logger.error(err.message);
-            });
-
-            this.dbManager.asyncAll(database, "SELECT Text FROM SpamTerms;").then((rows) => {
-                database.close();
-                self.spamTermCache = new Array(rows.length);
-                for (let i = 0; i < rows.length; i++)
-                    self.spamTermCache[i] = rows[i].Text;
-                for (let i = 0; i < self.spamTermCache.length; i++) {
-                    if (messageText.includes(self.spamTermCache[i]))
-                        botScore++;
-                }
-
-                self.deleteIfThresholdMet(self, botScore, botThreshold, e);
-            });
-        }
-        else {
-            for (let i = 0; i < self.spamTermCache.length; i++) {
-                if (messageText.includes(self.spamTermCache[i]))
-                    botScore++;
+            const rows = self.dbManager.getResultSet("SELECT Text FROM SpamTerms;", []);
+            self.spamTermCache = new Array(rows.length);
+            for (let i = 0; i < rows.length; i++) {
+                self.spamTermCache[i] = rows[i].Text;
             }
-
-            self.deleteIfThresholdMet(self, botScore, botThreshold, e);
         }
+
+        for (let i = 0; i < self.spamTermCache.length; i++) {
+            if (messageText.includes(self.spamTermCache[i]))
+                botScore++;
+        }
+
+        self.deleteIfThresholdMet(self, botScore, botThreshold, e);
     }
 
     onSpamTermAdd(self, term) {

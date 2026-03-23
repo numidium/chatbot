@@ -11,7 +11,6 @@ import Chatter from './Chatter.js';
 import Logger from './Logger.js';
 import https from 'https';
 import fs from 'fs';
-import sqlite3 from 'sqlite3';
 import process from 'node:process';
 
 process.on("uncaughtException", (err, origin) => {
@@ -57,7 +56,7 @@ const eventTypes = {
 
 const eventEmitter = new EventEmitter();
 const requestThrottler = new RequestThrottler(REQUEST_INTERVAL);
-const dbManager = new DatabaseManager(sqlite3, "./db/chatbot.db");
+const dbManager = new DatabaseManager("./db/chatbot.db");
 const macroExpander = new MacroExpander(dbManager);
 const commandProcessor = new CommandProcessor(eventEmitter, requestThrottler, dbManager, macroExpander);
 const antiBot = new AntiBot(eventEmitter, requestThrottler, dbManager);
@@ -341,6 +340,7 @@ async function tryChatAction(e, action, actionText, successText) {
 eventEmitter.on(eventTypes.streamStarted, (e) => { chatter.onReceiveStreamStartMessage(chatter, e); });
 eventEmitter.on(eventTypes.receivedChatMessage, (e) => { commandProcessor.onReceiveChatMessage(commandProcessor, e); });
 eventEmitter.on(eventTypes.receivedChatMessage, (e) => { antiBot.onReceiveChatMessage(antiBot, e); });
+eventEmitter.on(eventTypes.receivedChatMessage, (e) => { chatter.onReceiveChatMessage(chatter, e); });
 eventEmitter.on(eventTypes.spamTermAdd, (e) => { antiBot.onSpamTermAdd(antiBot, e); });
 eventEmitter.on(eventTypes.receivedChatMessage, (e) => { moderation.onReceiveChatMessage(moderation, e); });
 eventEmitter.on(eventTypes.chatMessageSend, onSendChatMessage);
