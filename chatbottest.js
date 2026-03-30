@@ -8,7 +8,7 @@ import AntiBot from './AntiBot.js';
 import Logger from './Logger.js';
 
 const eventEmitter = new EventEmitter();
-const requestThrottler = new RequestThrottler(3000);
+const requestThrottler = new RequestThrottler(0);
 requestThrottler.lastRequestTime = 0;
 const dbManager = new DatabaseManager("./db/test.db");
 const macroExpander = new MacroExpander(dbManager);
@@ -114,4 +114,19 @@ Logger.error({ errorCode: 400, errorText: "Dummy error message" });
 
 const randomChatPeriod = 5000;
 const chatter = new Chatter(eventEmitter, dbManager, macroExpander, randomChatPeriod);
+chatter.onReceiveStreamStartMessage(chatter, null); 
+chatter.onReceiveChatMessage(chatter, { 
+    message: {
+        text: "The rain in spain stays mainly on the plane the plane the plane. shane"
+    }  
+});
+
+eventEmitter.on("getWisdom", (e) => { chatter.onGetWisdom(chatter, e); });
+commandProcessor.onReceiveChatMessage(commandProcessor, {
+    chatter_user_name: "admin",
+    chatter_user_id: 66666666,
+    message: {
+        text: "!getwisdom 10"
+    }
+});
 

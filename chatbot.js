@@ -51,7 +51,8 @@ const eventTypes = {
     chatMessageSend: "chatMessageSend",
     chatMessageDelete: "chatMessageDelete",
     userTimeout: "userTimeout",
-    spamTermAdd: "spamTermAdd"
+    spamTermAdd: "spamTermAdd",
+    getWisdom: "getWisdom"
 };
 
 const eventEmitter = new EventEmitter();
@@ -341,6 +342,7 @@ eventEmitter.on(eventTypes.streamStarted, (e) => { chatter.onReceiveStreamStartM
 eventEmitter.on(eventTypes.receivedChatMessage, (e) => { commandProcessor.onReceiveChatMessage(commandProcessor, e); });
 eventEmitter.on(eventTypes.receivedChatMessage, (e) => { antiBot.onReceiveChatMessage(antiBot, e); });
 eventEmitter.on(eventTypes.receivedChatMessage, (e) => { chatter.onReceiveChatMessage(chatter, e); });
+eventEmitter.on(eventTypes.getWisdom, (e) => { chatter.onGetWisdom(chatter, e); });
 eventEmitter.on(eventTypes.spamTermAdd, (e) => { antiBot.onSpamTermAdd(antiBot, e); });
 eventEmitter.on(eventTypes.receivedChatMessage, (e) => { moderation.onReceiveChatMessage(moderation, e); });
 eventEmitter.on(eventTypes.chatMessageSend, onSendChatMessage);

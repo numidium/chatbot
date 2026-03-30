@@ -54,10 +54,11 @@ export default class AntiBot {
         self.deleteIfThresholdMet(self, botScore, botThreshold, e);
     }
 
-    onSpamTermAdd(self, term) {
-       self.spamTermCache[self.spamTermCache.length] = term;
-       const database = new self.dbManager.sqlite.Database(self.dbManager.dbPath, (err) => { if (err) Logger.error(err.message); });
-       self.dbManager.asyncRun(database, "INSERT INTO SpamTerms (Text) VALUES (?);", [term]).then();
+    onSpamTermAdd(self, e) {
+        const term = e.term;
+        self.spamTermCache[self.spamTermCache.length] = term;
+        const database = new self.dbManager.sqlite.Database(self.dbManager.dbPath, (err) => { if (err) Logger.error(err.message); });
+        self.dbManager.asyncRun(database, "INSERT INTO SpamTerms (Text) VALUES (?);", [term]).then();
     }
 }
 

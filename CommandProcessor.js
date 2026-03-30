@@ -36,10 +36,14 @@ export default class CommandProcessor {
             self.dbManager.runStatement(
                 "DELETE FROM Response WHERE Response.CommandId = ?;", [commandId]);
         },
-        addSpamTerm: (self, params, roles) => {
+        addspamterm: (self, params, roles) => {
             if (params == null || params.length < 1 || roles.indexOf(CommandProcessor.adminRole) === -1)
                 return;
-            self.eventEmitter("spamTermAdd", params[0]);
+            self.eventEmitter.emit("spamTermAdd", { term: params[0] });
+        },
+        getwisdom: (self, params, roles) => {
+            const wordCountParam = params[0] == null ? Math.floor(Math.random() * 10) : params[0];
+            self.eventEmitter.emit("getWisdom", { wordCount: wordCountParam });
         }
     };
 
@@ -57,15 +61,13 @@ export default class CommandProcessor {
         const messageParts = messageText.substring(1).split(" ");
         const command = messageParts[0].toLowerCase();
         const params = messageParts.splice(1);
-
         if (CommandProcessor.hardcodedCommands.hasOwnProperty(command)) {
             const rows = self.dbManager.getResultSet(
             `SELECT brt.RoleTypeId 
              FROM BotUser bu
              JOIN BotRole br ON br.UserId = bu.UserId
              JOIN BotRoleType brt ON brt.RoleTypeId = br.RoleTypeId
-             WHERE bu.ChatUserId = ?;
-            `, [e.chatter_user_id]);
+             WHERE bu.ChatUserId = ?;`, [e.chatter_user_id]);
             if (!rows || rows.length === 0)
                 return;
             const roles = [];
